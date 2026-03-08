@@ -1,10 +1,20 @@
 import os
+import subprocess
+import sys
+
+# Принудительная установка aiohttp (должна быть самым первым действием)
+try:
+    import aiohttp
+except ImportError:
+    print("⚠️ aiohttp не найден, устанавливаю принудительно...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "aiohttp>=3.9.0"])
+    import aiohttp
+    print("✅ aiohttp успешно установлен")
+
 import yt_dlp
 import asyncio
-import aiohttp
 import re
 import random
-import socket
 from typing import Optional, Tuple
 import config
 
@@ -15,11 +25,6 @@ class VideoDownloader:
         
         # Путь к файлу с куками
         self.cookies_file = os.path.join(os.path.dirname(__file__), 'cookies.txt')
-        
-        # Настройки прокси (для TOR или VPN)
-        self.use_proxy = False  # Включите, если используете TOR (127.0.0.1:9050)
-        self.proxy_url = "socks5://127.0.0.1:9050"  # Для TOR
-        # self.proxy_url = "http://127.0.0.1:8080"  # Для HTTP-прокси
         
         # Заголовки
         self.user_agents = [
@@ -53,59 +58,79 @@ class VideoDownloader:
                 return match.group(1)
         return None
     
-    # ========== TikTok через tikwm.com ==========
-    
-    async def _download_tiktok_tikwm(self, url: str) -> Optional[str]:
-        """Скачивает TikTok через tikwm.com"""
-        try:
-            print("🔄 Пробуем TikWM API...")
-            
-            # Исправляем URL (убираем лишнее)
-            api_url = "https://www.tikwm.com/api/"
-            
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'User-Agent': self.get_random_user_agent(),
-                    'Accept': 'application/json, text/plain, */*',
-                }
-                data = {'url': url, 'hd': '1'}
-                
-                async with session.post(api_url, data=data, headers=headers, timeout=30) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        
-                        if result.get('code') == 0 and result.get('data'):
-                            video_data = result['data']
-                            
-                            if video_data.get('play'):
-                                video_url = 'https://www.tikwm.com' + video_data['play']
-                                
-                                async with session.get(video_url, headers=headers) as video_resp:
-                                    if video_resp.status == 200:
-                                        filename = os.path.join(self.download_path, f"tiktok_{video_data.get('id', 'video')}.mp4")
-                                        with open(filename, 'wb') as f:
-                                            f.write(await video_resp.read())
-                                        print(f"✅ TikTok скачан через TikWM")
-                                        return filename
-        except Exception as e:
-            print(f"⚠️ TikWM не сработал: {e}")
-        
-        return None
-    
     async def _download_tiktok(self, url: str) -> Optional[str]:
-        """Скачивает TikTok через API"""
+        """Скачивает видео с TikTok"""
+        if 'vt.tiktok.com' in url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, allow_redirects=True, timeout=10) as resp:
+                        url = str(resp.url)
+            except:
+                pass
+        
         video_id = self.extract_video_id(url, "tiktok") or str(abs(hash(url)))[:8]
         print(f"🎵 TikTok ID: {video_id}")
         
-        # Пробуем TikWM
-        result = await self._download_tiktok_tikwm(url)
-        if result:
-            return result
+        # Пробуем через публичные API
+        apis = [
+            self._download_tiktok_tikwm,
+            self._download_tiktok_snaptik,
+        ]
         
-        print("❌ Все API TikTok не сработали")
+        for api in apis:
+            try:
+                result = await api(url)
+                if result:
+                    return result
+            except:
+                continue
+        
         return None
     
-    # ========== YouTube с поддержкой прокси ==========
+    async def _download_tiktok_tikwm(self, url: str) -> Optional[str]:
+        """Скачивает через tikwm.com"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                api_url = "https://www.tikwm.com/api/"
+                headers = {'User-Agent': self.get_random_user_agent()}
+                data = {'url': url, 'hd': '1'}
+                
+                async with session.post(api_url, data=data, headers=headers, timeout=20) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        if result.get('data') and result['data'].get('play'):
+                            video_url = 'https://www.tikwm.com' + result['data']['play']
+                            async with session.get(video_url) as video_resp:
+                                filename = os.path.join(self.download_path, f"tiktok_{video_id}.mp4")
+                                with open(filename, 'wb') as f:
+                                    f.write(await video_resp.read())
+                                return filename
+        except Exception as e:
+            print(f"⚠️ TikWM ошибка: {e}")
+        return None
+    
+    async def _download_tiktok_snaptik(self, url: str) -> Optional[str]:
+        """Скачивает через snaptik.app"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get('https://snaptik.app/', headers={'User-Agent': self.get_random_user_agent()}) as resp:
+                    html = await resp.text()
+                    token = re.search(r'name="token"[^>]*value="([^"]+)"', html)
+                    token = token.group(1) if token else ''
+                
+                data = {'url': url, 'token': token}
+                async with session.post('https://snaptik.app/action-2025.php', data=data) as resp:
+                    text = await resp.text()
+                    video_urls = re.findall(r'https?://[^\s"\']+\.snaptik\.app[^\s"\']*\.mp4', text)
+                    if video_urls:
+                        async with session.get(video_urls[0]) as video_resp:
+                            filename = os.path.join(self.download_path, f"tiktok_snaptik.mp4")
+                            with open(filename, 'wb') as f:
+                                f.write(await video_resp.read())
+                            return filename
+        except Exception as e:
+            print(f"⚠️ SnapTik ошибка: {e}")
+        return None
     
     async def _download_youtube(self, url: str) -> Optional[str]:
         """Скачивает видео с YouTube"""
@@ -115,51 +140,30 @@ class VideoDownloader:
         if os.path.exists(self.cookies_file):
             print(f"🍪 Использую куки из файла")
         
-        # Форматы для YouTube
         youtube_formats = [
             {'name': 'Audio', 'format': 'bestaudio/best', 'quality': 'audio'},
             {'name': '360p', 'format': 'best[height<=360][ext=mp4]', 'quality': 'video'},
         ]
         
-        # Настройки для обхода блокировок
-        ydl_opts_base = {
-            'quiet': True,
-            'no_warnings': True,
-            'ignoreerrors': True,
-            'retries': 5,
-            'fragment_retries': 5,
-            'skip_unavailable_fragments': True,
-            'headers': {'User-Agent': self.get_random_user_agent()},
-            'socket_timeout': 60,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web'],
-                }
-            },
-        }
-        
-        # Добавляем куки если есть
-        if os.path.exists(self.cookies_file):
-            ydl_opts_base['cookiefile'] = self.cookies_file
-        
-        # Добавляем прокси если включено
-        if self.use_proxy:
-            ydl_opts_base['proxy'] = self.proxy_url
-            print(f"🔌 Использую прокси: {self.proxy_url}")
-        
         for format_info in youtube_formats:
             try:
-                print(f"🔄 YouTube: {format_info['name']}")
+                ydl_opts = {
+                    'format': format_info['format'],
+                    'outtmpl': os.path.join(self.download_path, f'youtube_{video_id}.%(ext)s'),
+                    'quiet': True,
+                    'no_warnings': True,
+                    'ignoreerrors': True,
+                    'retries': 3,
+                    'headers': {'User-Agent': self.get_random_user_agent()},
+                }
                 
-                ydl_opts = ydl_opts_base.copy()
-                ydl_opts['format'] = format_info['format']
-                ydl_opts['outtmpl'] = os.path.join(self.download_path, f'youtube_{video_id}.%(ext)s')
+                if os.path.exists(self.cookies_file):
+                    ydl_opts['cookiefile'] = self.cookies_file
                 
                 if format_info['quality'] == 'audio':
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
-                        'preferredquality': '192',
                     }]
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -171,7 +175,6 @@ class VideoDownloader:
                         filename = ydl.prepare_filename(info)
                     
                     if os.path.exists(filename):
-                        print(f"✅ YouTube скачан: {filename}")
                         return filename
                     
                     base = os.path.splitext(filename)[0]
@@ -181,12 +184,10 @@ class VideoDownloader:
                             return test_file
             
             except Exception as e:
-                print(f"⚠️ Ошибка YouTube: {e}")
+                print(f"⚠️ YouTube ошибка: {e}")
                 continue
         
         return None
-    
-    # ========== Основной метод ==========
     
     async def download_video(self, url: str) -> Optional[str]:
         """Основной метод скачивания видео"""
@@ -196,9 +197,6 @@ class VideoDownloader:
                 result = await self._download_tiktok(url)
                 if result:
                     return result
-                else:
-                    # Если TikTok не работает, пробуем как YouTube (иногда помогает)
-                    print("⚠️ TikTok не сработал, пробуем как YouTube...")
             
             if 'youtube.com' in url or 'youtu.be' in url:
                 print("▶️ Обнаружен YouTube")
@@ -212,10 +210,8 @@ class VideoDownloader:
             raise Exception(f"Ошибка: {str(e)}")
     
     def cleanup(self, filepath: str):
-        """Удаляет временный файл"""
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
-                print(f"🧹 Файл удален: {filepath}")
         except:
             pass
