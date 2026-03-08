@@ -38,9 +38,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👥 Рефералов: {ref_count}
 
 🔗 Твоя ссылка: {link}
+
+⚡️ Сделано при поддержке Егора Горбасева
     """
     
-    keyboard = [[InlineKeyboardButton("👥 Мои рефералы", callback_data="refs")]]
+    keyboard = [
+        [InlineKeyboardButton("👥 Мои рефералы", callback_data="refs")],
+        [InlineKeyboardButton("🔗 Моя ссылка", callback_data="mylink")]
+    ]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,10 +56,45 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data == "refs":
         refs = db.get_referral_details(user_id)
         if refs:
-            text = "👥 Твои рефералы:\n" + "\n".join([f"• {r[2]}" for r in refs])
+            text = "👥 Твои рефералы:\n"
+            for i, ref in enumerate(refs, 1):
+                text += f"{i}. {ref[2]} (@{ref[1]})\n"
         else:
             text = "👥 Пока нет рефералов"
-        await q.edit_message_text(text)
+        
+        text += "\n\n⚡️ Сделано при поддержке Егора Горбасева"
+        
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif q.data == "mylink":
+        link = db.get_referral_link(user_id) or f"https://t.me/{config.BOT_USERNAME}?start={user_id}"
+        count = db.get_referral_count(user_id)
+        text = f"🔗 Твоя ссылка:\n{link}\n\n👥 Приглашено: {count}\n\n⚡️ Сделано при поддержке Егора Горбасева"
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif q.data == "back":
+        user = update.effective_user
+        ref_count = db.get_referral_count(user_id)
+        attempts = db.get_attempts(user_id)
+        link = db.get_referral_link(user_id) or f"https://t.me/{config.BOT_USERNAME}?start={user_id}"
+        
+        text = f"""
+👋 Привет, {user.first_name}!
+
+🎮 Попыток: {attempts}
+👥 Рефералов: {ref_count}
+
+🔗 Твоя ссылка: {link}
+
+⚡️ Сделано при поддержке Егора Горбасева
+        """
+        keyboard = [
+            [InlineKeyboardButton("👥 Мои рефералы", callback_data="refs")],
+            [InlineKeyboardButton("🔗 Моя ссылка", callback_data="mylink")]
+        ]
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -76,7 +116,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         with open(path, 'rb') as f:
-            await update.message.reply_video(f, caption=f"✅ Готово!")
+            await update.message.reply_video(f, caption=f"✅ Готово!\n\n⚡️ Сделано при поддержке Егора Горбасева")
         os.remove(path)
         await msg.delete()
     except Exception as e:
