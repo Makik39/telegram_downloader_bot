@@ -1,5 +1,22 @@
 import logging
 import os
+import subprocess
+import sys
+
+# Принудительная установка aiohttp, если её нет
+try:
+    import aiohttp
+except ImportError:
+    print("⚠️ aiohttp не найден, устанавливаю...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "aiohttp"])
+    import aiohttp
+    print("✅ aiohttp успешно установлен")
+
+import logging
+import os
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+# ... остальные импорты
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
