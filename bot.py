@@ -2,6 +2,13 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.constants import ParseMode
+import config
+from downloader import VideoDownloader
+from database import Database
 
 # Принудительная установка aiohttp, если её нет
 try:
@@ -11,19 +18,6 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "aiohttp"])
     import aiohttp
     print("✅ aiohttp успешно установлен")
-
-import logging
-import os
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-# ... остальные импорты
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from telegram.constants import ParseMode
-import config
-from downloader import VideoDownloader
-from database import Database
 
 # Настройка логирования
 logging.basicConfig(
@@ -53,7 +47,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             referred_by = int(args[0])
             print(f"   📌 Переход по реферальной ссылке от {referred_by}")
-            # Не даем бонус, если пользователь пригласил сам себя
             if referred_by == user_id:
                 print("   ⚠️ Пользователь попытался пригласить сам себя")
                 referred_by = None
@@ -95,7 +88,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⚡️ Быстро и бесплатно!
     """
     
-    # Создаем клавиатуру с кнопками
     keyboard = [
         [InlineKeyboardButton(f"🎮 Попытки: {attempts}", callback_data="my_attempts")],
         [InlineKeyboardButton("🔗 Моя реферальная ссылка", callback_data="my_referral")],
@@ -106,8 +98,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+# Команда для проверки рефералов (только для админа)
+async def check_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    admin_id = 7165406956  # Ваш ID
+    
+    if user_id != admin_id:
+        await update.message.reply_text("⛔ Эта команда только для администратора")
+        return
+    
+    cursor = db.conn.cursor()
+    
+    # Проверяем таблицу referrals
+    cursor.execute("SELECT * FROM referrals")
+    refs = cursor.fetchall()
+    
+    text = "🔍 **ПРОВЕРКА РЕФЕРАЛОВ**\n\n"
+    text += "📊 **Таблица referrals:**\n"
+    if refs:
+        for ref in refs:
+            text += f"   {ref}\n"
+    else:
+        text += "   ❌ Таблица пуста\n\n"
+    
+    # Проверяем пользователей с referred_by
+    cursor.execute("SELECT user_id, first_name, referred_by FROM users WHERE referred_by IS NOT NULL")
+    users = cursor.fetchall()
+    
+    text += "👥 **Пользователи с referred_by:**\n"
+    if users:
+        for user in users:
+            text += f"   {user[0]} ({user[1]}) -> приглашен: {user[2]}\n"
+    else:
+        text += "   ❌ Нет пользователей с referred_by\n"
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
 
 # Обработка callback-кнопок
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,31 +161,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 <b>Последние действия:</b>
 """
-        
         if history:
             for change, reason, date, remaining in history:
                 emoji = "➕" if change > 0 else "➖"
-                date_str = date.split()[1][:5]  # Только время
+                date_str = date.split()[1][:5]
                 text += f"\n{emoji} {reason}: {abs(change)} ({remaining} осталось) - {date_str}"
         else:
             text += "\nПока нет истории действий"
         
-        keyboard = [
-            [InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]
-        ]
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif query.data == "my_referral":
         referral_link = db.get_referral_link(user_id) or f"https://t.me/{config.BOT_USERNAME}?start={user_id}"
         referral_count = db.get_referral_count(user_id)
         
-        print(f"   📋 Запрос реферальной ссылки для {user_id}")
-        print(f"      Ссылка: {referral_link}")
-        print(f"      Рефералов: {referral_count}")
-        
-        # Делаем ссылку кликабельной
         text = f"""
 🔗 <b>Твоя реферальная ссылка:</b>
 
@@ -170,30 +188,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💡 <b>Как это работает:</b>
 1. Нажми на ссылку выше или отправь её друзьям
 2. Когда друг перейдет по ссылке и запустит бота, ты получишь +5 попыток
-3. Приглашай больше друзей и качай больше видео!
         """
-        
-        # Кнопка для копирования ссылки
         keyboard = [
             [InlineKeyboardButton("📋 Скопировать ссылку", callback_data="copy_link")],
             [InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif query.data == "my_referrals":
-        print(f"   👥 Запрос списка рефералов для {user_id}")
-        
         referrals = db.get_referral_details(user_id)
         attempts = db.get_attempts(user_id)
-        
-        print(f"      Найдено рефералов: {len(referrals) if referrals else 0}")
         
         if referrals:
             text = f"👥 <b>Твои приглашенные друзья:</b>\nТвои попытки: {attempts}\n\n"
             for i, ref in enumerate(referrals, 1):
-                # Распаковываем данные реферала
                 user_id_ref, username, first_name, join_date, downloads, bonus = ref
                 username_text = f"@{username}" if username and username != "нет_username" else first_name
                 date = join_date.split()[0] if join_date else "неизвестно"
@@ -202,11 +211,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"   📥 Скачиваний: {downloads}\n"
                 text += f"   💰 Ты получил: +{bonus} попыток\n\n"
         else:
-            text = f"👥 У тебя пока нет приглашенных друзей.\n\nТвои попытки: {attempts}\n\nПригласи друзей по своей реферальной ссылке и получи +5 попыток за каждого!"
+            text = f"👥 У тебя пока нет приглашенных друзей.\n\nТвои попытки: {attempts}"
         
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif query.data == "top_referrers":
@@ -214,11 +222,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_attempts = db.get_attempts(user_id)
         
         text = f"🏆 <b>Топ 10 рефереров:</b>\nТвои попытки: {user_attempts}\n\n"
-        
         if top_users:
             for i, (user_id_top, username, first_name, count, total_earned) in enumerate(top_users, 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "👤"
-                name = f"@{username}" if username and username != "нет_username" else first_name
+                name = f"@{username}" if username != "нет_username" else first_name
                 text += f"{medal} {i}. {name}\n"
                 text += f"   👥 Рефералов: {count}\n"
                 text += f"   💰 Всего попыток: {total_earned}\n\n"
@@ -227,7 +234,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif query.data == "my_stats":
@@ -253,7 +259,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif query.data == "help":
@@ -274,22 +279,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎁 <b>Реферальная программа:</b>
 • Пригласи друга = +5 попыток
 • Друг тоже получает 3 попытки
-• Соревнуйся в топе рефереров
 
 📦 <b>Максимальный размер:</b> {config.MAX_FILE_SIZE // (1024*1024)} MB
-
-❓ <b>Частые проблемы:</b>
-• Если видео не скачивается - проверь доступ к видео
-• Для приватных аккаунтов скачивание недоступно
         """
-        
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(help_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif query.data == "back_to_menu":
-        # Возвращаемся в главное меню
         user = update.effective_user
         referral_count = db.get_referral_count(user_id)
         attempts = db.get_attempts(user_id)
@@ -302,7 +299,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Выбери действие из меню ниже:
         """
-        
         keyboard = [
             [InlineKeyboardButton(f"🎮 Попытки: {attempts}", callback_data="my_attempts")],
             [InlineKeyboardButton("🔗 Моя реферальная ссылка", callback_data="my_referral")],
@@ -312,13 +308,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🆘 Помощь", callback_data="help")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif query.data == "copy_link":
         await query.answer("Ссылка скопирована! Отправь её друзьям.", show_alert=True)
 
-# Функция проверки поддерживаемого URL
 def is_supported_url(url: str) -> tuple:
     url_lower = url.lower()
     for domain, platform in config.SUPPORTED_SITES.items():
@@ -326,8 +320,6 @@ def is_supported_url(url: str) -> tuple:
             return True, platform
     return False, None
 
-# ========== ИСПРАВЛЕННАЯ ФУНКЦИЯ ОБРАБОТКИ СООБЩЕНИЙ ==========
-# (ТОЛЬКО ОДНА, БЕЗ ДУБЛИКАТОВ)
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     user_id = update.effective_user.id
@@ -335,17 +327,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     print(f"\n📨 ПОЛУЧЕНА ССЫЛКА от {user_id}: {url[:50]}...")
     
-    # Проверяем, поддерживается ли ссылка
     is_supported, platform = is_supported_url(url)
-    
     if not is_supported:
-        await update.message.reply_text(
-            "❌ Неподдерживаемая ссылка.\n"
-            "Пожалуйста, отправьте ссылку на TikTok или YouTube."
-        )
+        await update.message.reply_text("❌ Неподдерживаемая ссылка.\nПожалуйста, отправьте ссылку на TikTok или YouTube.")
         return
     
-    # Проверяем наличие попыток ДО скачивания
     attempts_before = db.get_attempts(user_id)
     print(f"   🎮 Попыток до скачивания: {attempts_before}")
     
@@ -355,74 +341,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🎮 Мои попытки", callback_data="my_attempts")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await update.message.reply_text(
-            "❌ У тебя закончились попытки скачивания!\n\n"
-            "Пригласи друзей по реферальной ссылке и получи +5 попыток за каждого!",
+            "❌ У тебя закончились попытки скачивания!\n\nПригласи друзей по реферальной ссылке и получи +5 попыток за каждого!",
             reply_markup=reply_markup
         )
         return
     
-    # Отправляем сообщение о начале обработки
     status_message = await update.message.reply_text(
-        f"⏳ Обрабатываю ссылку с {platform}...\n"
-        f"🎮 Осталось попыток: {attempts_before}\n"
-        "Это может занять несколько секунд"
+        f"⏳ Обрабатываю ссылку с {platform}...\n🎮 Осталось попыток: {attempts_before}\nЭто может занять несколько секунд"
     )
     
-    # Переменная для отслеживания успешности
     download_successful = False
     attempt_used = False
     
     try:
-        # Скачиваем видео (попытка НЕ списывается, если не удалось)
         filepath = await downloader.download_video(url)
         
         if not filepath or not os.path.exists(filepath):
-            await status_message.edit_text(
-                "❌ Не удалось скачать видео. Попробуйте другую ссылку.\n"
-                f"🎮 Попытки не потрачены: {attempts_before}"
-            )
+            await status_message.edit_text(f"❌ Не удалось скачать видео. Попробуйте другую ссылку.\n🎮 Попытки не потрачены: {attempts_before}")
             return
         
-        # Проверяем размер скачанного файла
         file_size = os.path.getsize(filepath)
         file_size_mb = file_size / (1024 * 1024)
-        
         print(f"📊 Размер видео: {file_size_mb:.2f} МБ")
         
         if file_size > config.MAX_FILE_SIZE:
             await status_message.edit_text(
-                f"❌ Файл слишком большой ({file_size_mb:.1f} МБ)\n"
-                f"Максимальный размер: {config.MAX_FILE_SIZE // (1024*1024)} МБ\n"
-                f"🎮 Попытки не потрачены: {attempts_before}"
+                f"❌ Файл слишком большой ({file_size_mb:.1f} МБ)\nМаксимальный размер: {config.MAX_FILE_SIZE // (1024*1024)} МБ\n🎮 Попытки не потрачены: {attempts_before}"
             )
             downloader.cleanup(filepath)
             return
         
-        # ✅ ТОЛЬКО ЗДЕСЬ списываем попытку - видео скачано и готово к отправке
         db.use_attempt(user_id)
         attempt_used = True
         attempts_after = attempts_before - 1
         print(f"   ✅ Попытка списана. Осталось: {attempts_after}")
         
-        # Отправляем видео с увеличенными таймаутами
-        await status_message.edit_text(
-            f"📤 Отправляю видео...\n"
-            f"📦 Размер: {file_size_mb:.1f} МБ\n"
-            f"🎮 Осталось попыток: {attempts_after}\n"
-            f"⏳ Это может занять несколько минут..."
-        )
+        await status_message.edit_text(f"📤 Отправляю видео...\n📦 Размер: {file_size_mb:.1f} МБ\n🎮 Осталось попыток: {attempts_after}\n⏳ Это может занять несколько минут...")
         
         try:
             with open(filepath, 'rb') as video_file:
                 await update.message.reply_video(
                     video=video_file,
-                    caption=f"✅ Скачано с {platform}\n\n"
-                            f"👤 Запросил: @{username}\n"
-                            f"🤖 @{config.BOT_USERNAME}\n"
-                            f"🎮 Осталось попыток: {attempts_after}\n"
-                            f"📦 Размер: {file_size_mb:.1f} МБ",
+                    caption=f"✅ Скачано с {platform}\n\n👤 Запросил: @{username}\n🤖 @{config.BOT_USERNAME}\n🎮 Осталось попыток: {attempts_after}\n📦 Размер: {file_size_mb:.1f} МБ",
                     supports_streaming=True,
                     read_timeout=600,
                     write_timeout=600,
@@ -432,71 +393,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             print(f"❌ Ошибка при отправке видео: {e}")
-            await status_message.edit_text(
-                f"❌ Не удалось отправить видео.\n"
-                f"🎮 Попытки восстановлены: {attempts_before}\n"
-                f"Ошибка: {str(e)[:100]}"
-            )
-            # Возвращаем попытку, так как отправка не удалась
+            await status_message.edit_text(f"❌ Не удалось отправить видео.\n🎮 Попытки восстановлены: {attempts_before}\nОшибка: {str(e)[:100]}")
             db.add_attempts(user_id, 1, "Возврат попытки (ошибка отправки)")
             downloader.cleanup(filepath)
             return
         
-        # Удаляем временный файл
         downloader.cleanup(filepath)
-        
-        # Обновляем статистику в базе данных
         platform_db = 'tiktok' if 'tiktok' in url.lower() else 'youtube'
         db.update_download_stats(user_id, platform_db)
-        
-        # Удаляем статусное сообщение
         await status_message.delete()
         
     except Exception as e:
         logger.error(f"Ошибка при обработке {url}: {e}", exc_info=True)
-        
-        # Проверяем, не была ли уже списана попытка
         current_attempts = db.get_attempts(user_id)
-        
         error_text = f"❌ Произошла ошибка при скачивании.\n"
-        
         if attempt_used:
-            # Если попытка была списана, но видео не скачано, возвращаем её
             db.add_attempts(user_id, 1, "Возврат попытки (ошибка скачивания)")
             error_text += f"🎮 Попытка возвращена. Текущие попытки: {current_attempts + 1}\n"
         else:
             error_text += f"🎮 Попытки не потрачены: {current_attempts}\n"
-        
-        error_text += f"Попробуйте другую ссылку или повторите позже."
-        
+        error_text += "Попробуйте другую ссылку или повторите позже."
         await status_message.edit_text(error_text)
 
 def main():
-    """Запуск бота"""
-    
-    # Проверяем наличие токена
     if not config.BOT_TOKEN or config.BOT_TOKEN == "ВАШ_ТОКЕН_СЮДА":
         print("❌ Ошибка: Не указан токен бота!")
         print("Получите токен у @BotFather и добавьте его в .env файл")
         return
     
-    # Создаем приложение
     application = Application.builder().token(config.BOT_TOKEN).build()
     
-    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
-    
-    # Добавляем обработчик callback-кнопок
+    application.add_handler(CommandHandler("checkref", check_referrals))
     application.add_handler(CallbackQueryHandler(button_callback))
-    
-    # Добавляем обработчик текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запускаем бота
     print("✅ Бот с реферальной системой запущен!")
     print(f"🤖 @{config.BOT_USERNAME}")
     print("📊 База данных с системой попыток инициализирована")
-    print("🔍 Включен режим отладки - смотрите вывод в консоли")
+    print("🔍 Добавлена команда /checkref для проверки рефералов")
     
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
