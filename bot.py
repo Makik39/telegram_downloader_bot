@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 downloader = VideoDownloader()
 db = Database()
 
-# 👇 Функция для отправки уведомления о реферале
 async def send_referral_notification(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     referrer_id = job.data['referrer_id']
@@ -23,8 +22,7 @@ async def send_referral_notification(context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             chat_id=referrer_id,
-            text=f"🎉 **У тебя новый реферал!**\n\nПользователь с ID `{user_id}` присоединился по твоей ссылке.\n✅ Ты получил **+5 попыток**!",
-            parse_mode='Markdown'
+            text=f"🎉 У тебя новый реферал!\n\nПользователь с ID {user_id} присоединился по твоей ссылке.\n✅ Ты получил +5 попыток!"
         )
     except Exception as e:
         print(f"Не удалось отправить уведомление: {e}")
@@ -40,11 +38,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if referred_by == user_id:
         referred_by = None
     
-    # 👇 Если это реферальный переход, планируем уведомление
     if referred_by:
         context.job_queue.run_once(
             send_referral_notification, 
-            2,  # через 2 секунды
+            2,
             data={'referrer_id': referred_by, 'user_id': user_id}
         )
     
@@ -54,20 +51,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ref_count = db.get_referral_count(user_id)
     attempts = db.get_attempts(user_id)
     
-    # 👇 ОБНОВЛЁННЫЙ ТЕКСТ С ИНФОРМАЦИЕЙ О БОНУСАХ
     text = f"""
 👋 Привет, {first_name}!
 
-🎮 У тебя **{attempts} попыток** скачивания
-💰 **+5 попыток** за каждого приглашённого друга!
+🎮 У тебя {attempts} попыток скачивания
+💰 +5 попыток за каждого приглашённого друга!
 
 🔗 Твоя реферальная ссылка:
 {link}
 
-⚡️ Сделано при поддержке Егора Горбасева
+Сделано при поддержке Егора Горбасева
     """
     
-    # 👇 ДОБАВЛЕНА КНОПКА "ИНФОРМАЦИЯ"
     keyboard = [
         [InlineKeyboardButton("👥 Мои рефералы", callback_data="refs")],
         [InlineKeyboardButton("🔗 Моя ссылка", callback_data="mylink")],
@@ -89,7 +84,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text = "👥 Пока нет рефералов"
         
-        text += "\n\n⚡️ Сделано при поддержке Егора Горбасева"
+        text += "\n\nСделано при поддержке Егора Горбасева"
         
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
         await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -97,32 +92,31 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif q.data == "mylink":
         link = db.get_referral_link(user_id) or f"https://t.me/{config.BOT_USERNAME}?start={user_id}"
         count = db.get_referral_count(user_id)
-        text = f"🔗 Твоя ссылка:\n{link}\n\n👥 Приглашено: {count}\n\n⚡️ Сделано при поддержке Егора Горбасева"
+        text = f"🔗 Твоя ссылка:\n{link}\n\n👥 Приглашено: {count}\n\nСделано при поддержке Егора Горбасева"
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
         await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # 👇 НОВАЯ КНОПКА "ИНФОРМАЦИЯ"
     elif q.data == "info":
         info_text = """
-ℹ️ **ИНФОРМАЦИЯ О БОТЕ**
+ℹ️ ИНФОРМАЦИЯ О БОТЕ
 
-🎥 **Какие видео можно скачивать:**
-• **YouTube** (любые видео и shorts)
-• **TikTok** (без водяных знаков)
+🎥 Какие видео можно скачивать:
+• YouTube (любые видео и shorts)
+• TikTok (без водяных знаков)
 
-📦 **Ограничения:**
+📦 Ограничения:
 • Максимальный размер: 500 МБ
 • Поддерживаются форматы MP4 и MP3
 
-🎮 **Система попыток:**
-• При первом запуске даётся **3 попытки**
-• Пригласи друга → **+5 попыток**
-• Сыграй в игру → **+3 попытки** (раз в 5 дней)
+🎮 Система попыток:
+• При первом запуске даётся 3 попытки
+• Пригласи друга → +5 попыток
+• Сыграй в игру → +3 попытки (раз в 5 дней)
 
-⚡️ Сделано при поддержке Егора Горбасева
+Сделано при поддержке Егора Горбасева
 """
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
-        await q.edit_message_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        await q.edit_message_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif q.data == "back":
         user = update.effective_user
@@ -133,13 +127,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"""
 👋 Привет, {user.first_name}!
 
-🎮 У тебя **{attempts} попыток** скачивания
-💰 **+5 попыток** за каждого приглашённого друга!
+🎮 У тебя {attempts} попыток скачивания
+💰 +5 попыток за каждого приглашённого друга!
 
 🔗 Твоя реферальная ссылка:
 {link}
 
-⚡️ Сделано при поддержке Егора Горбасева
+Сделано при поддержке Егора Горбасева
         """
         keyboard = [
             [InlineKeyboardButton("👥 Мои рефералы", callback_data="refs")],
@@ -168,7 +162,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         with open(path, 'rb') as f:
-            await update.message.reply_video(f, caption=f"✅ Готово!\n\n⚡️ Сделано при поддержке Егора Горбасева")
+            await update.message.reply_video(f, caption=f"✅ Готово!\n\nСделано при поддержке Егора Горбасева")
         os.remove(path)
         await msg.delete()
     except Exception as e:
